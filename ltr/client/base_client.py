@@ -10,6 +10,9 @@ from abc import ABC, abstractmethod
     their specific platform
 '''
 class BaseClient(ABC):
+    @abstractmethod
+    def get_host(self):
+        pass
 
     @abstractmethod
     def name(self):
@@ -32,7 +35,7 @@ class BaseClient(ABC):
         pass
 
     @abstractmethod
-    def create_featureset(self, index, name, config):
+    def create_featureset(self, index, name, ftr_config):
         pass
 
     @abstractmethod
@@ -49,6 +52,10 @@ class BaseClient(ABC):
 
     @abstractmethod
     def submit_model(self, featureset, index, model_name, model_payload):
+        pass
+
+    @abstractmethod
+    def submit_ranklib_model(self, featureset, index, model_name, model_payload):
         pass
 
     @abstractmethod

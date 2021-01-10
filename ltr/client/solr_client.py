@@ -8,11 +8,17 @@ from ltr.helpers.handle_resp import resp_msg
 class SolrClient(BaseClient):
     def __init__(self):
         self.docker = os.environ.get('LTR_DOCKER') != None
+        self.solr = requests.Session()
 
         if self.docker:
+            self.host = 'solr'
             self.solr_base_ep = 'http://solr:8983/solr'
         else:
+            self.host = 'localhost'
             self.solr_base_ep = 'http://localhost:8983/solr'
+
+    def get_host(self):
+        return self.host
 
     def name(self):
         return "solr"
@@ -41,15 +47,19 @@ class SolrClient(BaseClient):
         resp = requests.get('{}/admin/cores?'.format(self.solr_base_ep), params=params)
         resp_msg(msg="Created index {}".format(index), resp=resp)
 
-    def index_documents(self, index, doc_type, doc_src):
+    def index_documents(self, index, doc_src):
+        def commit():
+            resp = requests.get('{}/{}/update?commit=true'.format(self.solr_base_ep, index))
+            resp_msg(msg="Committed index {}".format(index), resp=resp)
+
         def flush(docs):
             print('Flushing {} docs'.format(len(docs)))
-            resp = requests.post('{}/{}/update?commitWithin=1500'.format(
+            resp = requests.post('{}/{}/update'.format(
                 self.solr_base_ep, index), json=docs)
             resp_msg(msg="Done", resp=resp)
             docs.clear()
 
-        BATCH_SIZE = 500
+        BATCH_SIZE = 5000
         docs = []
         for doc in doc_src:
             if 'release_date' in doc and doc['release_date'] is not None:
@@ -61,6 +71,7 @@ class SolrClient(BaseClient):
                 flush(docs)
 
         flush(docs)
+        commit()
 
     def reset_ltr(self, index):
         models = self.get_models(index)
@@ -79,10 +90,10 @@ class SolrClient(BaseClient):
             if 'store' not in feature or feature['store'] != name:
                 raise ValueError("Feature {} needs to be created with \"store\": \"{}\" ".format(feature['name'], name))
 
-    def create_featureset(self, index, name, config):
-        self.validate_featureset(name, config)
+    def create_featureset(self, index, name, ftr_config):
+        self.validate_featureset(name, ftr_config)
         resp = requests.put('{}/{}/schema/feature-store'.format(
-            self.solr_base_ep, index, name), json=config)
+            self.solr_base_ep, index, name), json=ftr_config)
         resp_msg(msg='Created {} feature store under {}:'.format(name, index), resp=resp)
 
 
@@ -125,9 +136,16 @@ class SolrClient(BaseClient):
 
         return resp['response']['docs']
 
+    def submit_model(self, featureset, index, model_name, solr_model):
+        url = '{}/{}/schema/model-store'.format(self.solr_base_ep, index)
+        resp = requests.delete('{}/{}'.format(url, model_name))
+        resp_msg(msg='Deleted Model {}'.format(model_name), resp=resp)
 
-    def submit_model(self, featureset, index, model_name, model_payload):
-        # Fetch feature metadata
+        resp = requests.put(url, json=solr_model)
+        resp_msg(msg='Created Model {}'.format(model_name), resp=resp)
+
+    def submit_ranklib_model(self, featureset, index, model_name, model_payload):
+        """ Submits a Ranklib model, converting it to Solr representation """
         resp = requests.get('{}/{}/schema/feature-store/{}'.format(self.solr_base_ep, index, featureset))
         resp_msg(msg='Submit Model {} Ftr Set {}'.format(model_name, featureset), resp=resp)
         metadata = resp.json()
@@ -140,21 +158,14 @@ class SolrClient(BaseClient):
         feature_mapping, _ = self.feature_set(index, featureset)
 
         solr_model = convert(model_payload, model_name, featureset, feature_mapping)
-
-        url = '{}/{}/schema/model-store'.format(self.solr_base_ep, index)
-        resp = requests.delete('{}/{}'.format(url, model_name))
-        resp_msg(msg='Deleted Model {}'.format(model_name), resp=resp)
-
-        resp = requests.put(url, json=solr_model)
-        resp_msg(msg='Created Model {}'.format(model_name), resp=resp)
-
+        self.submit_model(featureset, index, model_name, solr_model)
 
     def model_query(self, index, model, model_params, query):
         url = '{}/{}/select?'.format(self.solr_base_ep, index)
         params = {
             'q': query,
             'rq': '{{!ltr model={}}}'.format(model),
-            'rows': 100
+            'rows': 10000
         }
 
         resp = requests.post(url, data=params)
@@ -165,7 +176,7 @@ class SolrClient(BaseClient):
         url = '{}/{}/select?'.format(self.solr_base_ep, index)
 
         resp = requests.post(url, data=query)
-        resp_msg(msg='Query {}...'.format(str(query)[:10]), resp=resp)
+        #resp_msg(msg='Query {}...'.format(str(query)[:20]), resp=resp)
         resp = resp.json()
 
         # Transform to be consistent
@@ -174,6 +185,82 @@ class SolrClient(BaseClient):
                 doc['_score'] = doc['score']
 
         return resp['response']['docs']
+
+    def analyze(self, index, fieldtype, text):
+        # http://localhost:8983/solr/msmarco/analysis/field
+        url = '{}/{}/analysis/field?'.format(self.solr_base_ep, index)
+
+        query={
+            "analysis.fieldtype": fieldtype,
+            "analysis.fieldvalue": text
+        }
+
+        resp = requests.post(url, data=query)
+
+        analysis_resp = resp.json()
+        tok_stream = analysis_resp['analysis']['field_types']['text_general']['index']
+        tok_stream_result = tok_stream[-1]
+        return tok_stream_result
+
+    def term_vectors_skip_to(self, index, q='*:*', skip=0):
+        url = '{}/{}/tvrh/'.format(self.solr_base_ep, index)
+        query={
+            'q': q,
+            'cursorMark': '*',
+            'sort': 'id asc',
+            'fl': 'id',
+            'rows': str(skip)
+            }
+        tvrh_resp = requests.post(url, data=query)
+        return tvrh_resp.json()['nextCursorMark']
+
+    def term_vectors(self, index, field, q='*:*', start_cursor='*'):
+        """ Extract all term vectors for a field
+        """
+        # http://localhost:8983/solr/msmarco/tvrh?q=*:*&start=0&rows=10&fl=id,body&tvComponent=true&tv.positions=true
+        url = '{}/{}/tvrh/'.format(self.solr_base_ep, index)
+
+        def get_posns(weird_posns):
+            positions = []
+            if weird_posns[0] == 'positions':
+                for posn in weird_posns[1]:
+                    if posn == "position":
+                        continue
+                    else:
+                        positions.append(posn)
+
+
+        next_cursor = start_cursor
+        while True:
+
+            query={
+                "q": q,
+                "cursorMark": next_cursor,
+                "fl": "id",
+                "tv.fl": field,
+                "tvComponent": 'true',
+                "tv.positions": 'true',
+                'sort': 'id asc',
+                'rows': '2000',
+                'wt': 'json'
+            }
+
+            tvrh_resp = requests.post(url, data=query).json()
+
+            from ltr.client.solr_parse import parse_termvect_namedlist
+            parsed = parse_termvect_namedlist(tvrh_resp['termVectors'], field=field)
+            for doc_id, terms in parsed.items():
+                try:
+                    yield doc_id, terms[field]
+                except KeyError:
+                    yield doc_id, {}
+
+            next_cursor = tvrh_resp['nextCursorMark']
+
+            if query['cursorMark'] == next_cursor:
+                break
+
+
 
     def get_feature_stores(self, index):
         resp = requests.get('{}/{}/schema/feature-store'.format(self.solr_base_ep,

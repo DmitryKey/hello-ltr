@@ -1,55 +1,54 @@
-hello-ltr
+# Hello LTR :)
 
-The overall goal of this project is to demonstrate all of the steps required to work with LTR in Elasticsearch or Solr. Follow the setup instructions and check out the LTR notebooks in Solr or Elasticsearch
+The overall goal of this project is to demonstrate all of the steps required to work with LTR in Elasticsearch or Solr. There's two modes of running. Just running and editing notebooks in a docker container. Or local development (also requiring docker to run the search engine).
 
-# Setup your search engine
+## No fuss setup: You just want to play with LTR
 
-LTR examples here for Solr or Elasticsearch which require the right search engine to be installed
+Follow these steps if you're just playing around & are OK with possibly losing some work (all notebooks exist just in the docker container)
 
-## Setup Solr w/ LTR
-
-With Docker installed, a script will launch Solr & the config under the solr/ dir in the console:
+With docker & docker-compose simply run
 
 ```
-cd docker/solr
-./launch_solr.sh
-```
-
-Or manually
-
-- Go into the "Solr" docker directory: `cd docker/solr`
-- Run `docker build . -t ltr-solr` to create a image running Solr with LTR
-- Start the instance by running: `docker run --name ltr-solr -p 8983:8983 -d ltr-solr`
-- Subsequently run with `docker start ltr-solr` and `docker stop ltr-solr`
-
-## Setup Elasticsearch w/ LTR
-
-With Docker installed, a script will launch Elasticsearch w/ Kibana tooling in the console:
-
-```
-cd docker/elasticsearch
-./launch_es.sh
-```
-
-Manually build & run the containers
-
-```
-# Create Elasticsearch
-cd es-docker
-docker build -t ltr-elasticsearch .
-
-# Create Kibana
-cd kb-docker
-docker build -t ltr-kibana .
-
-# Launch
-cd ..
 docker-compose up
 ```
 
-# Setup & Run Jupyter Notebook Examples
+at the root dir and go to town!
 
-## Setup Python requirements
+This will run jupyter and all search engines in Docker containers. Check that each is up at the default ports:
+
+- Elasticsearch: [localhost:9200](localhost:9200)
+- Kibana: [localhost:5601](localhost:5601)
+- Jupyter: [localhost:8888](localhost:8888)
+
+## You want to build your own LTR notebooks
+
+Follow these steps if you want to do more serious work with the notebooks. For example, if you want to build a demo with your work's data or something you want to preserve later.
+
+### Run your search engine with Docker
+
+You probably just want to work with one search engine. So whichever one you're working with, launch that search engine in Docker.
+
+#### Running Solr w/ LTR
+
+Setup Solr with docker compose to work with just Solr examples:
+
+```
+cd notebooks/solr
+docker-compose up
+```
+
+#### Running Elasticsearch w/ LTR
+
+Setup Elasticsearch with docker compose to work with just Elasticsearch examples:
+
+```
+cd notebooks/elasticsearch
+docker-compose up
+```
+
+### Run Jupyter locally w/ Python 3 and all prereqs
+
+#### Setup Python requirements
 
 - Ensure Python 3 is installed on your system
 - Create a virtual environment: `python3 -m venv venv`
@@ -58,16 +57,33 @@ docker-compose up
 
 __Note:__ The above commands should be run from the root folder of the project.
 
-## Start Jupyter notebook and confirm operation
+#### Start Jupyter notebook and confirm operation
 
 - Run `jupyter notebook`
+- Browse to notebooks/{search\_engine}/{collection} 
 - Open either the "hello-ltr (Solr)" or "hello-ltr (ES)" as appropriate and ensure you get a graph at the last cell
 
+## Tests
 
-## Getting Started
-- Run `jupyter notebook` and load the hello-ltr notebook
-- Run thru each cell to get more familiar with the LTR pipeline
+### Automatically run everything...
 
-# Docker Compose
+To run a full suite of tests, such as to verify a PR, you can simply run
 
-If you hit any snags with the JDK or python dependencies, the [docker](docker/) folder has a docker-compose configuration that prepares an environment to run all of the notebooks.
+./tests/test.sh
+
+Optionally with containers rebuilt
+
+./tests/test.sh --rebuild-containers
+
+Failing tests will have their output in `tests/last_run.ipynb`
+
+### While developing...
+
+For more informal development:
+
+- Startup the Solr and ES Docker containers
+- Do your development
+- Run the command as needed:
+`python tests/run_most_nbs.py`
+- Tests fail if notebooks return any errors
+  - The failing notebook will be stored at `tests/last_run.ipynb`

@@ -41,8 +41,9 @@ class ElasticClient(BaseClient):
         In the future, we may wish to isolate an Index's feature
         store to a feature store of the same name of the index
     """
-    def __init__(self):
+    def __init__(self, configs_dir='.'):
         self.docker = os.environ.get('LTR_DOCKER') != None
+        self.configs_dir = configs_dir #location of elastic configs
 
         if self.docker:
             self.host = 'elastic'
@@ -51,6 +52,9 @@ class ElasticClient(BaseClient):
 
         self.elastic_ep = 'http://{}:9200/_ltr'.format(self.host)
         self.es = Elasticsearch('http://{}:9200'.format(self.host))
+
+    def get_host(self):
+        return self.host
 
     def name(self):
         return "elastic"
@@ -62,24 +66,25 @@ class ElasticClient(BaseClient):
 
     def create_index(self, index):
         """ Take the local config files for Elasticsearch for index, reload them into ES"""
-        with open("docker/elasticsearch/%s_settings.json" % index) as src:
+        cfg_json_path = os.path.join(self.configs_dir, "%s_settings.json" % index)
+        with open(cfg_json_path) as src:
             settings = json.load(src)
             resp = self.es.indices.create(index, body=settings)
             resp_msg(msg="Created index {}".format(index), resp=ElasticResp(resp))
 
-    def index_documents(self, index, doc_type, doc_src):
+    def index_documents(self, index, doc_src):
 
         def bulkDocs(doc_src):
             for doc in doc_src:
                 if 'id' not in doc:
                     raise ValueError("Expecting docs to have field 'id' that uniquely identifies document")
                 addCmd = {"_index": index,
-                          "_type": doc_type,
                           "_id": doc['id'],
                           "_source": doc}
                 yield addCmd
 
         resp = elasticsearch.helpers.bulk(self.es, bulkDocs(doc_src), chunk_size=100)
+        self.es.indices.refresh(index=index)
         resp_msg(msg="Streaming Bulk index DONE {}".format(index), resp=BulkResp(resp))
 
     def reset_ltr(self, index):
@@ -88,8 +93,8 @@ class ElasticClient(BaseClient):
         resp = requests.put(self.elastic_ep)
         resp_msg(msg="Initialize Default LTR feature store".format(), resp=resp)
 
-    def create_featureset(self, index, name, config):
-        resp = requests.post('{}/_featureset/{}'.format(self.elastic_ep, name), json=config)
+    def create_featureset(self, index, name, ftr_config):
+        resp = requests.post('{}/_featureset/{}'.format(self.elastic_ep, name), json=ftr_config)
         resp_msg(msg="Create {} feature set".format(name), resp=resp)
 
     def log_query(self, index, featureset, ids, params={}):
@@ -129,7 +134,7 @@ class ElasticClient(BaseClient):
         if ids is not None:
             params["query"]["bool"]["must"] = terms_query
 
-        resp = self.es.search(index, body=params)
+        resp = self.es.search(index=index, body=params)
         resp_msg(msg="Searching {} - {}".format(index, str(terms_query)[:20]), resp=SearchResp(resp))
 
         matches = []
@@ -147,8 +152,6 @@ class ElasticClient(BaseClient):
 
         return matches
 
-
-
     def submit_model(self, featureset, index, model_name, model_payload):
         model_ep = "{}/_model/".format(self.elastic_ep)
         create_ep = "{}/_featureset/{}/_createmodel".format(self.elastic_ep, featureset)
@@ -156,6 +159,10 @@ class ElasticClient(BaseClient):
         resp = requests.delete('{}{}'.format(model_ep, model_name))
         print('Delete model {}: {}'.format(model_name, resp.status_code))
 
+        resp = requests.post(create_ep, json=model_payload)
+        resp_msg(msg="Created Model {}".format(model_name), resp=resp)
+
+    def submit_ranklib_model(self, featureset, index, model_name, model_payload):
         params = {
             'model': {
                 'name': model_name,
@@ -165,10 +172,7 @@ class ElasticClient(BaseClient):
                 }
             }
         }
-
-        resp = requests.post(create_ep, json=params)
-        resp_msg(msg="Created Model {}".format(model_name), resp=resp)
-
+        self.submit_model(featureset, index, model_name, params)
 
     def model_query(self, index, model, model_params, query):
         params = {
@@ -187,7 +191,7 @@ class ElasticClient(BaseClient):
             "size": 1000
         }
 
-        resp = self.es.search(index, body=params)
+        resp = self.es.search(index=index, body=params)
         resp_msg(msg="Searching {} - {}".format(index, str(query)[:20]), resp=SearchResp(resp))
 
         # Transform to consistent format between ES/Solr
@@ -198,7 +202,7 @@ class ElasticClient(BaseClient):
         return matches
 
     def query(self, index, query):
-        resp = self.es.search(index, body=query)
+        resp = self.es.search(index=index, body=query)
         resp_msg(msg="Searching {} - {}".format(index, str(query)[:20]), resp=SearchResp(resp))
 
         # Transform to consistent format between ES/Solr
@@ -227,8 +231,8 @@ class ElasticClient(BaseClient):
 
         return mapping, rawFeatureSet
 
-    def get_doc(self, doc_id, index, doc_type='movie'):
-        resp = self.es.get(index=index, doc_type=doc_type, id=doc_id)
+    def get_doc(self, doc_id, index):
+        resp = self.es.get(index=index, id=doc_id)
         #resp_msg(msg="Fetched Doc".format(docId), resp=ElasticResp(resp), throw=False)
         return resp['_source']
 

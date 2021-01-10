@@ -1,21 +1,34 @@
 import json
 
-movies=json.load(open('data/tmdb.json'))
+class Memoize:
+    """ Adapted from
+        https://stackoverflow.com/questions/1988804/what-is-memoization-and-how-can-i-use-it-in-python"""
+    def __init__(self, f):
+        self.f = f
+        self.memo = {}
+    def __call__(self, *args):
+        if not args in self.memo:
+            self.memo[args] = self.f(*args)
+        #Warning: You may wish to do a deepcopy here if returning objects
+        return self.memo[args]
 
-def get_movie(tmdb_id):
+@Memoize
+def load_movies(json_path):
+    return json.load(open(json_path))
+
+def get_movie(tmdb_id, movies='data/tmdb.json'):
+    movies = load_movies(movies)
     tmdb_id=str(tmdb_id)
-    global movies
     return movies[tmdb_id]
-
 
 def noop(src_movie, base_doc):
     return base_doc
 
 
-def indexable_movies(enrich=noop):
+def indexable_movies(enrich=noop, movies='data/tmdb.json'):
     """ Generates TMDB movies, similar to how ES Bulk indexing
-        uses a generator to generate bulk index/update actions """
-    global movies
+    uses a generator to generate bulk index/update actions"""
+    movies = load_movies(movies)
     idx = 0
     for movieId, tmdbMovie in movies.items():
         try:
@@ -47,5 +60,3 @@ def indexable_movies(enrich=noop):
             idx += 1
         except KeyError as k: # Ignore any movies missing these attributes
             continue
-
-

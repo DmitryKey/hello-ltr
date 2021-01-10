@@ -1,4 +1,22 @@
-FROM elasticsearch:6.5.2
- 
-# Install the LTR plugin matching the ES version above, LTR initialization will be performed via notebook.
-RUN ./bin/elasticsearch-plugin install http://es-learn-to-rank.labs.o19s.com/ltr-1.1.0-es6.5.2.zip -b
+FROM python:3.7-stretch
+
+# Install openjdk
+RUN apt-get update && \
+    apt-get install -y openjdk-8-jdk && \
+    apt-get clean;
+
+# Setup a user 
+RUN useradd -ms /bin/bash ltr 
+WORKDIR /home/ltr
+
+# Make current directory accesible
+ADD . /home/ltr/hello-ltr
+
+# Install requirements
+RUN chown -R ltr.ltr hello-ltr
+WORKDIR /home/ltr/hello-ltr
+
+RUN pip install -r requirements.txt
+USER ltr
+
+CMD jupyter notebook --ip=0.0.0.0 --no-browser --NotebookApp.token='' 

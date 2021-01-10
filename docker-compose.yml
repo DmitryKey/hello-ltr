@@ -1,0 +1,43 @@
+version: '3' 
+services:
+  notebooks:
+    build: .
+    container_name: hello-ltr-notebook
+    ports:
+      - 8888:8888 
+    environment:
+      - LTR_DOCKER=yes 
+    links:
+      - elastic
+      - solr
+  
+  elastic:
+    build:
+      context: ./notebooks/elasticsearch/.docker/es-docker/
+      dockerfile: Dockerfile
+    container_name: hello-ltr-elastic
+    ports:
+      - 9200:9200
+
+  kibana:
+    build:
+      context: ./notebooks/elasticsearch/.docker/kb-docker/
+      dockerfile: Dockerfile
+    container_name: hello-ltr-kibana
+    expose:
+      - "5601"
+    ports:
+     - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: "http://hello-ltr-elastic:9200"
+      ELASTICSEARCH_URL: "http://hello-ltr-elastic:9200"
+      SERVER_HOST: "0.0.0.0"
+
+  solr:
+    build:
+      context: ./notebooks/solr/
+      dockerfile: Dockerfile
+    container_name: hello-ltr-solr
+    ports:
+      - 8983:8983 
+

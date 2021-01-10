@@ -1,11 +1,78 @@
 import re
+from contextlib import contextmanager
+
+class JudgmentsWriter:
+    """ Wraps writing to file descriptor for
+        a list of judgments """
+    def __init__(self, f):
+        self.f = f
+        self.judgments=[]
+
+    def write(self, judgment=None, judgments=None):
+        if judgment is not None:
+            self.judgments.append(judgment)
+        elif judgments is not None:
+            self.judgments.extend(judgments)
+
+    def flush(self):
+        judgments_to_file(self.f, self.judgments)
+
+
+class JudgmentsReader:
+    """ Wraps reading from file descriptor for
+     lazy judgment reading..."""
+    def __init__(self, f):
+        self.f = f
+        self.kw_with_weight = _queriesFromHeader(f)
+        self.judgments = _judgment_rows(f, self.kw_with_weight)
+
+    def keywords(self, qid):
+        return self.kw_with_weight[qid][0]
+
+    def __iter__(self):
+        return self.judgments
+
+@contextmanager
+def judgments_open(path=None, mode='r'):
+    """ Work with judgments from the filesystem,
+        either in a read or write mode"""
+    try:
+        f=open(path, mode)
+        if mode[0] == 'r':
+            yield JudgmentsReader(f)
+        elif mode[0] == 'w':
+            writer = JudgmentsWriter(f)
+            yield writer
+            writer.flush()
+    finally:
+        f.close()
+
+@contextmanager
+def judgments_writer(f):
+    """ Write to a judgment list at
+        the provided file descripter (like StringIO)"""
+    try:
+        writer = JudgmentsWriter(f)
+        yield writer
+    finally:
+        writer.flush()
+        pass
+
+@contextmanager
+def judgments_reader(f):
+    """ Read from a judgment list at
+        the provided file descripter (like StringIO)"""
+    try:
+        yield JudgmentsReader(f)
+    finally:
+        pass
 
 class Judgment:
     def __init__(self, grade, qid, keywords, docId, features=[], weight=1):
         self.grade = grade
         self.qid = qid
         self.keywords = keywords
-        self.docId = str(int(docId)) # To force ValueError
+        self.docId = docId
         self.features = features # 0th feature is ranklib feature 1
         self.weight = weight
 
@@ -17,6 +84,9 @@ class Judgment:
 
     def __str__(self):
         return "grade:%s qid:%s (%s) docid:%s" % (self.grade, self.qid, self.keywords, self.docId)
+
+    def __repr__(self):
+        return "Judgment(grade={grade},qid={qid},keywords={keywords},docId={docId},features={features},weight={weight}".format(**vars(self))
 
     def toRanklibFormat(self):
         featuresAsStrs = ["%s:%s" % (idx+1, feature) for idx, feature in enumerate(self.features)]
@@ -55,7 +125,6 @@ def _queriesFromHeader(lines):
                     weight = int(keywordAndWeight[-1])
                 rVal[int(m.group(1))] = (keyword, weight)
         except ValueError as e:
-            import pdb; pdb.set_trace()
             print(e)
     print("Recognizing %s queries..." % len(rVal))
 
@@ -110,35 +179,46 @@ def _judgmentsFromBody(lines):
             #print("Not Recognized as Judgment %s" % line)
 
 
-def judgments_from_file(filename):
-    with open(filename) as f:
-        qidToKeywords = _queriesFromHeader(f)
-    with open(filename) as f:
-        lastQid = -1
-        for grade, qid, docId, features in _judgmentsFromBody(f):
-            if lastQid != qid and qid % 100 == 0:
-                print("Parsing QID %s" % qid)
-            yield Judgment(grade=grade, qid=qid,
-                           keywords=qidToKeywords[qid][0],
-                           weight=qidToKeywords[qid][1],
-                           docId=docId,
-                           features=features)
-            lastQid = qid
+def _judgment_rows(f, qidToKeywords):
+    lastQid = -1
+    for grade, qid, docId, features in _judgmentsFromBody(f):
+        if qid < lastQid:
+            raise ValueError("Judgments not sorted by qid in file")
+        if lastQid != qid and qid % 100 == 0:
+            print("Parsing QID %s" % qid)
+        yield Judgment(grade=grade, qid=qid,
+                       keywords=qidToKeywords[qid][0],
+                       weight=qidToKeywords[qid][1],
+                       docId=docId,
+                       features=features)
+        lastQid = qid
 
 
-def judgments_to_file(filename, judgmentsList):
-    judgToQid = judgments_by_qid(judgmentsList) #Pretty hideosly slow stuff
+def judgments_from_file(f):
+    """ Read judgments from a SVMRank File
+        f is a file object
+    """
+    qidToKeywords = _queriesFromHeader(f)
+    yield from _judgment_rows(f, qidToKeywords)
+
+def judgments_to_file(f, judgmentsList):
+    """ Write judgments from a SVMRank File
+        f is a file object
+    """
+    # TODO - consider if a groupby approach would work instead of needing everything in memory
+    judgToQid = _judgments_by_qid(judgmentsList) #Pretty hideosly slow stuff
     fileHeader = _queriesToHeader({qid: (judgs[0].keywords, judgs[0].weight) for qid, judgs in judgToQid.items()})
     judgByQid = sorted(judgmentsList, key=lambda j: j.qid)
-    with open(filename, 'w+') as f:
-        f.write(fileHeader)
-        for judg in judgByQid:
-            f.write(judg.toRanklibFormat() + '\n')
+    f.write(fileHeader)
+    for judg in judgByQid:
+        f.write(judg.toRanklibFormat() + '\n')
 
 
 
 
-def judgments_by_qid(judgments):
+def _judgments_by_qid(judgments):
+    """ Create a dictionary of qid->judgments
+        Prefer itertools groupby"""
     rVal = {}
     for judgment in judgments:
         try:
@@ -147,6 +227,20 @@ def judgments_by_qid(judgments):
             rVal[judgment.qid] = [judgment]
     return rVal
 
+def judgments_to_nparray(judgments):
+    """ Return
+        - features - num samples x num features
+        - predictors - num samples x grade, qid
+    """
+    import numpy as np
+    predictors = []
+    features = []
+    for idx, judg in enumerate(judgments):
+        predictors.append([judg.grade, judg.qid])
+        features.append(judg.features)
+    features = np.array(features)
+    predictors = np.array(predictors)
+    return features, predictors
 
 def duplicateJudgmentsByWeight(judgmentsByQid):
 

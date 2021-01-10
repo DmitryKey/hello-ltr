@@ -50,7 +50,6 @@ def genreGrade(movie):
 def synthesize(client, judgmentsOutFile='genre_by_date_judgments.txt', autoNegate=False):
     print('Generating judgments for scifi & drama movies')
 
-
     if client.name() == 'elastic':
         params = {
             "query": {
@@ -98,8 +97,8 @@ def synthesize(client, judgmentsOutFile='genre_by_date_judgments.txt', autoNegat
                                     docId=movie['id'],
                                     keywords=negGenre)
                 judgments.append(judgment)
-
-    judgments_to_file(judgmentsOutFile, judgmentsList=judgments)
+    with open(judgmentsOutFile, 'w') as f:
+        judgments_to_file(f, judgmentsList=judgments)
 
     print('Done')
     return judgments

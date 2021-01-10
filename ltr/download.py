@@ -1,26 +1,30 @@
 import requests
+from os import path
 
-def download():
-    resources = [
-        'http://es-learn-to-rank.labs.o19s.com/tmdb.json',
-        'http://es-learn-to-rank.labs.o19s.com/blog.jsonl',
-        'http://es-learn-to-rank.labs.o19s.com/osc_judgments.txt',
-        'http://es-learn-to-rank.labs.o19s.com/RankyMcRankFace.jar',
-        'http://es-learn-to-rank.labs.o19s.com/title_judgments.txt',
-        'http://es-learn-to-rank.labs.o19s.com/genome_judgments.txt',
-        'http://es-learn-to-rank.labs.o19s.com/sample_judgments_train.txt'
-    ]
+def download_one(uri, dest='data/', force=False):
+    import os
 
-    def download(uri):
-        filename = uri[uri.rfind('/') + 1:]
-        with open('data/{}'.format(filename), 'wb') as out:
-            print('GET {}'.format(uri))
-            resp = requests.get(uri, stream=True)
-            for chunk in resp.iter_content(chunk_size=1024):
-                if chunk:
-                    out.write(chunk)
+    if not os.path.exists(dest):
+        os.makedirs(dest)
 
-    for uri in resources:
-        download(uri)
+    if not os.path.isdir(dest):
+        raise ValueError("dest {} is not a directory".format(dest))
 
-    print('Done.')
+    filename = uri[uri.rfind('/') + 1:]
+    filepath = os.path.join(dest, filename)
+    if path.exists(filepath):
+        if not force:
+            print(filepath + ' already exists')
+            return
+        print("exists but force=True, Downloading anyway")
+
+    with open(filepath, 'wb') as out:
+        print('GET {}'.format(uri))
+        resp = requests.get(uri, stream=True)
+        for chunk in resp.iter_content(chunk_size=1024):
+            if chunk:
+                out.write(chunk)
+
+def download(uris, dest='data/', force=False):
+    for uri in uris:
+        download_one(uri=uri, dest=dest, force=force)
